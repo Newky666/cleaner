@@ -1,4 +1,4 @@
-﻿# 系统清理与加速工具 · System Cleaner
+# 系统清理与加速工具 · System Cleaner
 
 [English](README_EN.md) | 简体中文
 
