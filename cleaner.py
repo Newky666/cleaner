@@ -44,7 +44,7 @@ from common import (  # noqa: E402
     setup_logging, default_log_path, elevate_and_rerun,
 )
 
-VERSION = "2.0"
+VERSION = "3.0"
 
 try:  # 任一模块导入失败也要给出可读提示, 而不是裸 traceback
     import memory_cleaner as mc

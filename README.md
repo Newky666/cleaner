@@ -5,7 +5,7 @@
 > **系统加速器** — 纯 Python 标准库实现的 Windows 清理/加速工具，**零第三方依赖**（不用 `pip install`，只用 `ctypes` 直接调用 Windows 原生接口）。
 > 内存清理 · 垃圾清理 · 游戏加速 · 启动项与大文件管理，一套命令行 + 一套图形界面全覆盖。
 
-![版本](https://img.shields.io/badge/version-2.0-blue) ![许可证](https://img.shields.io/badge/license-MIT-green) ![依赖](https://img.shields.io/badge/dependencies-none-brightgreen) ![平台](https://img.shields.io/badge/platform-Windows%2010%2F11-informational)
+![版本](https://img.shields.io/badge/version-3.0-blue) ![许可证](https://img.shields.io/badge/license-MIT-green) ![依赖](https://img.shields.io/badge/dependencies-none-brightgreen) ![平台](https://img.shields.io/badge/platform-Windows%2010%2F11-informational)
 
 ---
 

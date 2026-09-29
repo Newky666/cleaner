@@ -7,7 +7,7 @@ English | [简体中文](README.md)
 > Memory cleanup · Junk cleanup · Game boost · Startup & large-file management,
 > with both a unified CLI and a desktop GUI.
 
-![version](https://img.shields.io/badge/version-2.0-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![dependencies](https://img.shields.io/badge/dependencies-none-brightgreen) ![platform](https://img.shields.io/badge/platform-Windows%2010%2F11-informational)
+![version](https://img.shields.io/badge/version-3.0-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![dependencies](https://img.shields.io/badge/dependencies-none-brightgreen) ![platform](https://img.shields.io/badge/platform-Windows%2010%2F11-informational)
 
 ---
 
