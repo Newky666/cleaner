@@ -6,6 +6,10 @@ __pycache__/
 build/
 dist/
 
+# ---- 打包过程日志 ----
+build_output.log
+build*.log
+
 # ---- 本工具运行时生成的文件(含个人环境信息, 不应入库) ----
 cleaner.log
 *.log

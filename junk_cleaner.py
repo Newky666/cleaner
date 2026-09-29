@@ -288,11 +288,15 @@ def _relative_depth(root: str, base: str) -> int:
     return os.path.relpath(root, base).count(os.sep) + 1
 
 
-def _iter_files(target: JunkTarget) -> Iterable[str]:
+def _iter_files(target: JunkTarget,
+                should_cancel: Optional[Callable[[], bool]] = None) -> Iterable[str]:
     """遍历一个目标里的所有待删除文件(不进入符号链接/目录联接)。
 
     max_depth 语义: 1 = 只要 base 目录下的文件; 2 = 再下一层子目录; 0 = 不限制。
     (旧实现用 continue 提前跳过整个 os.walk 回合, 既漏文件又让层级计数出错)
+
+    改用 os.scandir 迭代: Windows 上目录项的"是否目录"信息随目录枚举一起返回,
+    不需要像 os.walk 那样对每个子目录再补一次 os.path.islink 判断, 目录多时能省一截。
     """
     for base in _expand_paths(target.path):
         if not os.path.exists(base):
@@ -301,21 +305,35 @@ def _iter_files(target: JunkTarget) -> Iterable[str]:
             if target.match(os.path.basename(base)):
                 yield base
             continue
-        for root, dirs, files in os.walk(base, topdown=True):
-            dirs[:] = [d for d in dirs if not os.path.islink(os.path.join(root, d))]
-            # 若"再往下 1 层"就会超出限制, 则不递归; 本层文件始终会处理
-            if target.max_depth and (_relative_depth(root, base) + 1) >= target.max_depth:
-                dirs[:] = []
-            for name in files:
-                if not target.match(name):
+
+        pending = [base]
+        while pending:
+            root = pending.pop()
+            depth = _relative_depth(root, base)
+            try:
+                entries = list(os.scandir(root))
+            except OSError:
+                continue
+            for index, entry in enumerate(entries):
+                # 每 256 项检查一次取消信号, 长扫描也能随时停
+                if should_cancel and index % 256 == 0 and should_cancel():
+                    return
+                try:
+                    if entry.is_dir(follow_symlinks=False):
+                        if not target.max_depth or depth + 1 < target.max_depth:
+                            pending.append(entry.path)
+                    elif target.match(entry.name):
+                        yield entry.path
+                except OSError:
                     continue
-                yield os.path.join(root, name)
 
 
-def scan_target(target: JunkTarget) -> Tuple[int, int]:
+def scan_target(target: JunkTarget,
+                should_cancel: Optional[Callable[[], bool]] = None
+                ) -> Tuple[int, int]:
     """返回目标的 (字节数, 文件数)。"""
     size, count = 0, 0
-    for path in _iter_files(target):
+    for path in _iter_files(target, should_cancel):
         try:
             size += os.path.getsize(path)
             count += 1
@@ -324,21 +342,31 @@ def scan_target(target: JunkTarget) -> Tuple[int, int]:
     return size, count
 
 
-def clean_target(target: JunkTarget,
-                 progress: ProgressFn = None) -> Dict[str, int]:
-    """删除目标里的文件, 返回 {removed, freed, failed}。"""
+def clean_paths(paths: Iterable[str],
+                progress: ProgressFn = None) -> Dict[str, int]:
+    """按文件路径列表删除(复用扫描结果, 省掉第二次目录遍历)。"""
     result = {"removed": 0, "freed": 0, "failed": 0}
-    for path in _iter_files(target):
+    for index, path in enumerate(paths):
         try:
             size = os.path.getsize(path)
             os.remove(path)
             result["removed"] += 1
             result["freed"] += size
-        except OSError:  # 被占用的文件自动跳过
+        except OSError:  # 被占用/已不存在的文件自动跳过
             result["failed"] += 1
-        if progress and result["removed"] % 200 == 0:
+        if progress and index and index % 200 == 0:
             progress("已删除 %d 个文件, 释放 %s" % (result["removed"],
                                               human(result["freed"])))
+    return result
+
+
+def clean_target(target: JunkTarget,
+                 progress: ProgressFn = None,
+                 should_cancel: Optional[Callable[[], bool]] = None
+                 ) -> Dict[str, int]:
+    """删除目标里的文件, 返回 {removed, freed, failed}。"""
+    result = clean_paths(
+        (p for p in _iter_files(target, should_cancel)), progress=progress)
     if target.delete_root:
         for base in _expand_paths(target.path):
             if os.path.isdir(base) and not os.path.islink(base):
@@ -360,8 +388,10 @@ class JunkScanResult:
     size: int = 0
     files: int = 0
     admin_only: bool = False   # 该类别是否需要管理员才能清理
+    paths: List[str] = field(default_factory=list)  # 仅 with_paths=True 时填充
 
     def to_dict(self) -> dict:
+        # paths 可能有几万条, 不适合塞进 JSON, 这里刻意不输出
         return {"key": self.key, "title": self.title, "risk": self.risk,
                 "size": self.size, "files": self.files,
                 "admin_only": self.admin_only}
@@ -387,26 +417,54 @@ def category_needs_admin(category: JunkCategory) -> bool:
     return any(target.needs_admin for target in category.targets)
 
 
-def scan_category(category: JunkCategory) -> JunkScanResult:
-    """扫描单个类别的大小与文件数。"""
+def scan_category(category: JunkCategory,
+                  with_paths: bool = False,
+                  should_cancel: Optional[Callable[[], bool]] = None
+                  ) -> JunkScanResult:
+    """扫描单个类别的大小与文件数。
+
+    with_paths=True 时会顺手把文件清单记下来, 之后清理可以直接复用,
+    省掉"扫一遍 + 清的时候再遍历一遍"的第二次目录遍历。
+    """
     result = JunkScanResult(key=category.key, title=category.title, risk=category.risk,
                             admin_only=category_needs_admin(category))
     if category.recycle:
         result.size, result.files = recycle_bin_info()
         return result
     for target in category.targets:
-        size, count = scan_target(target)
-        result.size += size
-        result.files += count
+        if should_cancel and should_cancel():
+            break
+        if with_paths:
+            paths: List[str] = []
+            size, count = 0, 0
+            for path in _iter_files(target, should_cancel):
+                try:
+                    size += os.path.getsize(path)
+                    count += 1
+                except OSError:
+                    continue
+                paths.append(path)
+            result.paths.extend(paths)
+            result.size += size
+            result.files += count
+        else:
+            size, count = scan_target(target, should_cancel)
+            result.size += size
+            result.files += count
     return result
 
 
 def clean_category(category: JunkCategory,
-                   progress: ProgressFn = None) -> JunkCleanResult:
+                   progress: ProgressFn = None,
+                   paths: Optional[Sequence[str]] = None,
+                   should_cancel: Optional[Callable[[], bool]] = None
+                   ) -> JunkCleanResult:
     """清理单个类别。
 
     非管理员时会主动跳过需要管理员的目标(而不是硬删然后报一堆失败),
     这样 "清理了 0 个文件" 的原因在结果里一目了然。
+
+    paths: 来自上一次 scan_category(with_paths=True) 的文件清单, 传了就不再重新遍历目录。
     """
     result = JunkCleanResult(key=category.key, title=category.title)
     if category.recycle:
@@ -419,12 +477,28 @@ def clean_category(category: JunkCategory,
             result.failed = 1
         return result
 
+    # 复用扫描结果: 删完文件后, 需要连目录一起删的 target 再走一次 rmtree
+    if paths is not None:
+        stats = clean_paths(paths, progress=progress)
+        result.freed += stats["freed"]
+        result.removed += stats["removed"]
+        result.failed += stats["failed"]
+        for target in category.targets:
+            if target.delete_root:
+                for base in _expand_paths(target.path):
+                    if os.path.isdir(base) and not os.path.islink(base):
+                        shutil.rmtree(base, ignore_errors=True)
+        return result
+
     admin = is_admin()
     for target in category.targets:
+        if should_cancel and should_cancel():
+            break
         if target.needs_admin and not admin:
             result.skipped += 1
             continue
-        stats = clean_target(target, progress=progress)
+        stats = clean_target(target, progress=progress,
+                             should_cancel=should_cancel)
         result.freed += stats["freed"]
         result.removed += stats["removed"]
         result.failed += stats["failed"]
@@ -432,27 +506,42 @@ def clean_category(category: JunkCategory,
 
 
 def scan_all(categories: Optional[Dict[str, JunkCategory]] = None,
-             progress: ProgressFn = None) -> List[JunkScanResult]:
+             progress: ProgressFn = None,
+             with_paths: bool = False,
+             should_cancel: Optional[Callable[[], bool]] = None
+             ) -> List[JunkScanResult]:
     cats = categories or build_categories()
     results: List[JunkScanResult] = []
     for category in cats.values():
+        if should_cancel and should_cancel():
+            break
         if progress:
             progress("正在扫描 %s ..." % category.title)
-        results.append(scan_category(category))
+        results.append(scan_category(category, with_paths=with_paths,
+                                     should_cancel=should_cancel))
     return results
 
 
 def clean_selected(keys: Iterable[str],
                    categories: Optional[Dict[str, JunkCategory]] = None,
                    dry_run: bool = False,
-                   progress: ProgressFn = None) -> List[JunkCleanResult]:
-    """按 key 列表清理, 返回每类的结果。"""
+                   progress: ProgressFn = None,
+                   paths_map: Optional[Dict[str, Sequence[str]]] = None,
+                   should_cancel: Optional[Callable[[], bool]] = None
+                   ) -> List[JunkCleanResult]:
+    """按 key 列表清理, 返回每类的结果。
+
+    paths_map: {类别 key: 文件清单}, 来自上一次 scan_all(with_paths=True)。
+    界面上"先扫描再清理"的流程传进来, 清理阶段就不必第二次遍历目录。
+    """
     cats = categories or build_categories()
     results: List[JunkCleanResult] = []
     for key in keys:
         category = cats.get(key)
         if not category:
             continue
+        if should_cancel and should_cancel():
+            break
         if progress:
             progress("正在清理 %s ..." % category.title)
         if dry_run:
@@ -461,7 +550,10 @@ def clean_selected(keys: Iterable[str],
                 key=category.key, title=category.title, freed=scan.size,
                 removed=scan.files, failed=0))
         else:
-            results.append(clean_category(category, progress=progress))
+            paths = (paths_map or {}).get(key)
+            results.append(clean_category(category, progress=progress,
+                                          paths=paths,
+                                          should_cancel=should_cancel))
     return results
 
 

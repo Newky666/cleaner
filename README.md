@@ -65,6 +65,23 @@ py cleaner.py gui          :: 打开图形界面
 | `run_game_mode.bat` | 挂机检测全屏游戏并自动加速 |
 | `run_tests.bat` | 跑一遍回归测试 |
 
+### 打包成 exe（可选，不想装 Python 就用它）
+
+```bat
+py -m pip install pyinstaller     :: 只有"打包"这一步需要它
+py build.py                       :: 或双击 build.bat
+```
+
+| 产物 | 说明 |
+| --- | --- |
+| **`dist\Cleaner.exe`** | **主程序**：图形界面，双击即用。内置 UAC 清单，一启动就申请管理员权限，全部功能可用 |
+| `dist\cleaner-cli.exe` | 命令行版，用法与 `py cleaner.py ...` 完全一致 |
+
+* 单文件模式，拷到任意 Windows 电脑双击即可运行，**目标机器不需要安装 Python**。
+* 运行期文件写在 exe 同目录：`cleaner.log`、`cleaner_config.json`。
+* 想启动更快：`py build.py --onedir`（目录模式）；不想每次弹 UAC：`--no-uac`（系统级清理会受限）。
+* 打包只在开发时需要 PyInstaller；**生成的 exe 本身依然零第三方依赖**。
+
 ---
 
 ## 3. 统一命令行入口
@@ -247,13 +264,15 @@ py cleaner.py gui     :: 或双击 run_gui.bat
 
 ```
 cleaner/
-├── cleaner.py            统一命令行入口(概览 / once / doctor / 四大模块透传 / gui)
+├── cleaner.py            统一命令行入口(概览 / once / doctor / 四大模块透传 / gui)  ← 命令行主程序
+├── cleaner_gui.py        图形界面(tkinter, 零第三方依赖)                          ← 界面主程序
+├── build.py / build.bat  打包脚本(需要 PyInstaller) -> dist\Cleaner.exe
+├── cleaner.ico           程序图标(纯标准库生成, build.py 可重新生成)
 ├── common.py             公共基础设施(格式化 / 日志 / 权限 / UAC / 路径 / winreg)
 ├── memory_cleaner.py     内存清理引擎 + CLI(status/clean/profiles/list/watch)
 ├── junk_cleaner.py       垃圾清理引擎 + CLI(scan/clean)
 ├── system_tools.py       系统工具箱 + CLI(startups/largefiles)
 ├── game_booster.py       游戏模式 + CLI(list/boost/auto/tweaks)
-├── cleaner_gui.py        图形界面(tkinter, 零第三方依赖)
 ├── run_gui.bat           双击 -> 图形界面(自动提权)
 ├── run_clean.bat         双击 -> 深度内存清理
 ├── run_game_mode.bat     双击 -> 游戏模式

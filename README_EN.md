@@ -69,6 +69,23 @@ py cleaner.py gui          :: launch the desktop GUI
 | `run_game_mode.bat` | Watches for fullscreen games and boosts them |
 | `run_tests.bat` | Runs the regression test suite |
 
+### Packaging an exe (optional)
+
+```bat
+py -m pip install pyinstaller     :: only needed for building
+py build.py                       :: or double-click build.bat
+```
+
+| Output | Description |
+| --- | --- |
+| **`dist\Cleaner.exe`** | **The main program**: desktop GUI, just double-click it. An embedded UAC manifest requests administrator rights on launch, so every feature works |
+| `dist\cleaner-cli.exe` | Command-line build, identical to `py cleaner.py ...` |
+
+* Single-file builds: copy them to any Windows PC and run — **no Python required on the target machine**.
+* Runtime files are written next to the exe: `cleaner.log`, `cleaner_config.json`.
+* Faster startup: `py build.py --onedir`. No UAC prompt: `--no-uac` (system-level cleaning will be limited).
+* PyInstaller is a **build-time only** dependency — the produced exe still ships **zero third-party dependencies**.
+
 ---
 
 ## 3. Unified CLI
@@ -259,13 +276,15 @@ py cleaner.py gui     :: or double-click run_gui.bat
 
 ```
 cleaner/
-├── cleaner.py            unified CLI (overview / once / doctor / passthrough / gui)
+├── cleaner.py            unified CLI (overview / once / doctor / passthrough / gui)  <- CLI entry
+├── cleaner_gui.py        desktop GUI (tkinter, zero dependencies)                   <- GUI entry
+├── build.py / build.bat  packaging script (needs PyInstaller) -> dist\Cleaner.exe
+├── cleaner.ico           app icon (generated with the stdlib, see build.py)
 ├── common.py             shared infrastructure (format / logging / privileges / UAC / registry)
 ├── memory_cleaner.py     memory engine + CLI (status/clean/profiles/list/watch)
 ├── junk_cleaner.py       junk engine + CLI (scan/clean)
 ├── system_tools.py       system toolbox + CLI (startups/largefiles)
 ├── game_booster.py       game mode + CLI (list/boost/auto/tweaks)
-├── cleaner_gui.py        desktop GUI (tkinter, zero dependencies)
 ├── run_gui.bat           double-click -> GUI (auto elevation)
 ├── run_clean.bat         double-click -> deep memory clean
 ├── run_game_mode.bat     double-click -> game mode

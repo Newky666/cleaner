@@ -23,16 +23,30 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import tempfile
 import time
 from typing import Dict, Iterable, Optional, Sequence, Tuple
 
 APP_NAME = "cleaner"
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 MB = 1024 * 1024
 GB = 1024 * MB
 
 IS_WINDOWS = os.name == "nt"
+
+# 打包成 exe 后(PyInstaller), __file__ 指向临时解压目录 _MEIPASS, 那个目录每次运行
+# 都会变、退出即删。所以配置/日志/备份必须落到 exe 自己所在的目录, 否则设置无法保存。
+IS_FROZEN = bool(getattr(sys, "frozen", False))
+
+
+def _detect_base_dir() -> str:
+    """程序"数据目录": 开发时是源码目录, 打包后是 exe 所在目录。"""
+    if IS_FROZEN:
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+BASE_DIR = _detect_base_dir()
 
 LOG = logging.getLogger("cleaner")
 
@@ -209,7 +223,9 @@ def build_win_paths() -> Dict[str, str]:
         "appdata": env_path("APPDATA", os.path.join(home, "AppData", "Roaming")),
         "programdata": env_path("PROGRAMDATA", r"C:\ProgramData"),
         "windir": env_path("WINDIR", r"C:\Windows"),
-        "temp": __import__("tempfile").gettempdir(),
+        # 必须用顶层 import: 动态 __import__ 不会被 PyInstaller 的静态分析发现,
+        # 打包后会报 ModuleNotFoundError(实测踩过一次)
+        "temp": tempfile.gettempdir(),
         "desktop": os.path.join(home, "Desktop"),
     }
 

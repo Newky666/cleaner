@@ -44,7 +44,8 @@ from memory_cleaner import (  # noqa: E402
 )
 from junk_cleaner import category_needs_admin  # noqa: E402
 
-CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cleaner_config.json")
+# 打包成 exe 后要落到 exe 所在目录(见 common.BASE_DIR 的说明)
+CONFIG_PATH = os.path.join(common.BASE_DIR, "cleaner_config.json")
 AUTO_INTERVALS = {
     "关闭": 0,
     "10 分钟": 600,
@@ -141,6 +142,7 @@ class CleanerApp(tk.Tk):
         self._proc_sort: Optional[str] = None
         self._proc_reverse = True
         self._game_status = ""
+        self._cancel_scan = threading.Event()  # 垃圾/大文件扫描的中断信号
         self._ui_queue: "queue.Queue" = queue.Queue()
         self.booster.trim = True
         self.booster.purge_standby = bool(self.config_data.get("purge_standby", True))
@@ -450,6 +452,8 @@ class CleanerApp(tk.Tk):
             row=0, column=1, padx=(6, 0))
         ttk.Button(top, text="全不选", command=lambda: self._on_junk_select(False)).grid(
             row=0, column=2, padx=(6, 0))
+        ttk.Button(top, text="停止", command=self._on_cancel_scan).grid(
+            row=0, column=3, padx=(6, 0))
         self.junk_total_var = tk.StringVar(value="尚未扫描")
         ttk.Label(top, textvariable=self.junk_total_var, style="Title.TLabel").grid(
             row=0, column=3, sticky="e")
@@ -606,6 +610,8 @@ class CleanerApp(tk.Tk):
         self.large_min_var = tk.StringVar(value="500")
         ttk.Entry(lbar, textvariable=self.large_min_var, width=8).pack(side="left", padx=(4, 8))
         ttk.Button(lbar, text="开始扫描", command=self._on_scan_large).pack(side="left")
+        ttk.Button(lbar, text="停止", command=self._on_cancel_scan).pack(
+            side="left", padx=(6, 0))
         ttk.Button(lbar, text="打开所在文件夹", command=self._on_open_large_folder).pack(
             side="left", padx=(6, 0))
 
@@ -638,11 +644,12 @@ class CleanerApp(tk.Tk):
 
     # -- 日志(线程安全) ----------------------------------------------------
     def log(self, message: str) -> None:
-        line = "%s %s" % (time.strftime("%H:%M:%S"), message)
-        if threading.current_thread() is threading.main_thread():
-            self._append_log(line)
-        else:
-            self.log_queue.put(line)
+        """写一条日志。
+
+        统一走 mc.LOG: 由 QueueLogHandler 送回界面显示, 同时被 FileHandler 落盘到
+        cleaner.log。这样界面上的每一步操作都会留下可追溯的记录(排查问题时很有用)。
+        """
+        mc.LOG.info(message)
 
     def _append_log(self, line: str) -> None:
         self.log_text.configure(state="normal")
@@ -1033,12 +1040,23 @@ class CleanerApp(tk.Tk):
         else:
             self.junk_total_var.set("尚未扫描")
 
+    def _on_cancel_scan(self) -> None:
+        """请求中断当前正在进行的扫描/清理(线程安全)。"""
+        if self._busy_tasks:
+            self._cancel_scan.set()
+            self.log("已请求停止, 当前步骤完成后中断...")
+        else:
+            self.log("当前没有正在进行的扫描。")
+
     def _on_scan_junk(self) -> None:
         self.log("开始扫描垃圾文件, 请稍候...")
         self.junk_scan_results = {}
+        self._cancel_scan.clear()
 
         def work():
-            return jc.scan_all(self.junk_cats)
+            # with_paths=True: 把文件清单留下来, 清理时直接复用, 省掉第二次遍历
+            return jc.scan_all(self.junk_cats, progress=self.log, with_paths=True,
+                               should_cancel=self._cancel_scan.is_set)
 
         def done(results) -> None:
             for result in results or []:
@@ -1051,7 +1069,10 @@ class CleanerApp(tk.Tk):
                     if category and category_needs_admin(category) and not is_admin():
                         self.junk_tree.set(result.key, "risk", "需管理员")
             self._update_junk_total()
-            self.log("垃圾扫描完成, 点击「清理选中垃圾」释放空间。")
+            if self._cancel_scan.is_set():
+                self.log("扫描已中断(结果只统计到中断位置)。")
+            else:
+                self.log("垃圾扫描完成, 点击「清理选中垃圾」释放空间。")
 
         self._run_async(work, done, name="扫描垃圾")
 
@@ -1063,9 +1084,15 @@ class CleanerApp(tk.Tk):
         if not messagebox.askyesno("确认清理", "将清理 %d 个类别的垃圾文件, 是否继续?" % len(keys)):
             return
         self.log("开始清理 %d 个类别的垃圾文件..." % len(keys))
+        self._cancel_scan.clear()
+        # 复用刚扫描出的文件清单: 清理阶段不再重新遍历目录
+        paths_map = {key: result.paths for key, result in self.junk_scan_results.items()
+                     if result.paths}
 
         def work():
-            return jc.clean_selected(keys, self.junk_cats)
+            return jc.clean_selected(keys, self.junk_cats, progress=self.log,
+                                     paths_map=paths_map,
+                                     should_cancel=self._cancel_scan.is_set)
 
         def done(results) -> None:
             rows = results or []
@@ -1164,17 +1191,23 @@ class CleanerApp(tk.Tk):
             min_mb = 500.0
         min_size = int(min_mb * 1024 * 1024)
         self.log("开始扫描 %s 中大于 %s 的文件..." % (directory, jc.human(min_size)))
+        self._cancel_scan.clear()
 
         def work():
-            return st.scan_large_files(directory, min_size=min_size, top_n=200)
+            return st.scan_large_files(directory, min_size=min_size, top_n=200,
+                                       progress=self.log,
+                                       should_cancel=self._cancel_scan.is_set)
 
         def done(files) -> None:
             self.large_tree.delete(*self.large_tree.get_children())
             for f in files or []:
                 self.large_tree.insert("", "end", values=(jc.human(f.size), f.path))
             self._apply_tree_stripes(self.large_tree)
-            self.log("大文件扫描完成: 找到 %d 个大于 %s 的文件。" % (
-                len(files or []), jc.human(min_size)))
+            if self._cancel_scan.is_set():
+                self.log("扫描已中断, 已列出中断前找到的 %d 个文件。" % len(files or []))
+            else:
+                self.log("大文件扫描完成: 找到 %d 个大于 %s 的文件。" % (
+                    len(files or []), jc.human(min_size)))
 
         self._run_async(work, done, name="扫描大文件")
 

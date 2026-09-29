@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import argparse
+import heapq
 import os
 import shutil
 import sys
@@ -296,28 +297,52 @@ class LargeFile:
 
 def scan_large_files(root: str, min_size: int = 500 * 1024 * 1024,
                      top_n: int = 100,
-                     progress: Optional[Callable[[str], None]] = None) -> List[LargeFile]:
-    """递归扫描 root 目录, 返回大于 min_size 的文件(按大小降序)。"""
-    root = os.path.abspath(root)
-    results: List[LargeFile] = []
-    scanned_dirs = 0
+                     progress: Optional[Callable[[str], None]] = None,
+                     should_cancel: Optional[Callable[[], bool]] = None
+                     ) -> List[LargeFile]:
+    """递归扫描 root 目录, 返回大于 min_size 的最多 top_n 个文件(按大小降序)。
 
-    for base, dirs, files in os.walk(root):
-        # 不进入符号链接 / 目录联接, 避免死循环与重复统计
-        dirs[:] = [d for d in dirs if not os.path.islink(os.path.join(base, d))]
+    三个优化点:
+      * os.scandir 取目录项, DirEntry 自带类型信息, 不必对每个子目录再调一次 islink
+      * 用大小为 top_n 的小顶堆保留"目前最大的 N 个", 而不是把所有命中文件都存下来再排序:
+        扫全盘时命中可能上万个, 内存占用从 O(命中数) 降到 O(top_n)
+      * should_cancel 让界面能随时中断扫描
+    """
+    root = os.path.abspath(root)
+    heap: List[Tuple[int, str]] = []   # (size, path) 小顶堆, 只保留最大的 top_n 个
+    scanned_dirs = 0
+    pending = [root]
+
+    while pending:
+        if should_cancel and should_cancel():
+            break
+        current = pending.pop()
+        try:
+            entries = list(os.scandir(current))
+        except OSError:
+            continue
         scanned_dirs += 1
         if progress and scanned_dirs % 200 == 0:
-            progress("已扫描 %d 个目录..." % scanned_dirs)
-        for name in files:
-            path = os.path.join(base, name)
+            progress("已扫描 %d 个目录, 命中 %s 个文件..." % (scanned_dirs, len(heap)))
+        for entry in entries:
             try:
-                size = os.path.getsize(path)
+                # 不进入符号链接 / 目录联接, 避免死循环与重复统计
+                if entry.is_dir(follow_symlinks=False):
+                    pending.append(entry.path)
+                    continue
+                size = entry.stat().st_size
             except OSError:
                 continue
-            if size >= min_size:
-                results.append(LargeFile(path=path, size=size))
-    results.sort(key=lambda f: f.size, reverse=True)
-    return results[:top_n]
+            if size < min_size:
+                continue
+            if len(heap) < top_n:
+                heapq.heappush(heap, (size, entry.path))
+            elif size > heap[0][0]:
+                heapq.heapreplace(heap, (size, entry.path))
+
+    files = [LargeFile(path=path, size=size)
+             for size, path in sorted(heap, key=lambda item: item[0], reverse=True)]
+    return files
 
 
 # ---------------------------------------------------------------------------
