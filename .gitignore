@@ -1,0 +1,21 @@
+# ---- Python 运行时产物 ----
+__pycache__/
+*.py[cod]
+*.exe
+*.spec
+build/
+dist/
+
+# ---- 本工具运行时生成的文件(含个人环境信息, 不应入库) ----
+cleaner.log
+*.log
+cleaner_config.json
+game_tweaks_backup.json
+
+# ---- 本地/工具私有的目录 ----
+.codebuddy/
+.github/copilot-instructions.md
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
