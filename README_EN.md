@@ -49,7 +49,7 @@ error-tolerant, locked files are skipped, and everything runs locally.
 ## 2. Quick Start
 
 ```bat
-git clone https://github.com/Newky/cleaner.git
+git clone https://github.com/Newky666/cleaner.git
 cd cleaner
 
 py cleaner.py              :: overview panel (RAM / lists / disk / privileges)

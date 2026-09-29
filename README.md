@@ -45,7 +45,7 @@
 ## 2. 快速开始
 
 ```bat
-git clone https://github.com/Newky/cleaner.git
+git clone https://github.com/Newky666/cleaner.git
 cd cleaner
 
 py cleaner.py              :: 概览面板(内存/页表/磁盘/权限)
